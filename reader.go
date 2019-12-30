@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+    "archive/zip"
+    "errors"
 )
 
 // NpyReader can read data from a Numpy binary array into a Go slice.
@@ -177,3 +179,75 @@ func NewReader(r io.Reader) (*NpyReader, error) {
 
 	return rdr, nil
 }
+
+// NpzReader lists NpyReaders from .npz zipped archive
+type NpzReader struct {
+    // keywords
+    Key []string
+
+    // slice *NpyReader
+    Npy []*NpyReader
+    
+    // reader of this source
+    r *zip.ReadCloser
+}
+
+func (npz *NpzReader) Close() {
+    npz.r.Close()
+}
+
+// return NpyReaders corresponding to given keyword
+func (npz *NpzReader) Get(key string) (*NpyReader, error) {
+    
+    // search the index for the requested key
+    index := -1
+    for i, v := range npz.Key {
+        if v == key {
+            index = i
+            break
+        }
+    }
+    if index == -1 {
+        err := errors.New(key + " is not a file in the archive")
+        return nil, err
+    }
+    // return corresponding NpyReader
+    return npz.Npy[index], nil
+}
+
+// Parse .npy files included in .npz zipped archive
+func OpenNpzReader(f string) (*NpzReader, error) {
+
+    rzip, err := zip.OpenReader(f) // rzip: zip.Reader type
+    if err != nil {
+        return nil, err
+    }
+
+    num := len(rzip.File)
+    keyNames := make([]string, num)
+    npyPtrs := make([]*NpyReader, num)
+
+    for i, fh := range rzip.File { // fh: zip.FileHeader type 
+        rio, err := fh.Open() // rio: io.Reader type
+        if err != nil {
+            return nil, err
+        }
+        
+        rnpy, err := NewReader(rio) // rnpy: NpyReader type
+        if err != nil {
+            return nil, err
+        }
+        
+        iNpy := strings.LastIndex(fh.Name, ".npy")
+        keyNames[i] = fh.Name[:iNpy]
+        npyPtrs[i] = rnpy
+    }
+    
+    rnpz := &NpzReader{
+        Key: keyNames,
+        Npy: npyPtrs,
+        r: rzip,
+    }
+    return rnpz, nil
+}
+
